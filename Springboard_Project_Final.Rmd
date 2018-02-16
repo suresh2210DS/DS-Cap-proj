@@ -1,0 +1,289 @@
+---
+pdf_document: default
+author: "Suresh Gopalakrishnan"
+date: "February 11, 2018"
+output: pdf_document
+title: 'NYC Taxi Rides: Trip Duration Prediction'
+dev: png
+urlcolor: blue
+---
+```{r fig.align = 'default', warning = FALSE, out.width="100%", echo=FALSE}
+knitr::include_graphics("Taxi2.jpg", auto_pdf = TRUE)
+```
+
+
+```{r Set_memory, message=FALSE, echo=FALSE,results = 'hide'}
+# to resolve memory issue
+memory.limit(size = 56000)
+```
+ 
+```{r remove_junk, message=FALSE, echo=FALSE}
+# to resolve ggmap table error during execution.
+if (exists(".GeocodedInformation")) {
+  rm(.GeocodedInformation)
+}
+```
+
+```{r multiplot, echo=FALSE,message=FALSE}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  require(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots <- length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(
+      seq(1, cols * ceiling(numPlots / cols)),
+      ncol = cols, nrow = ceiling(numPlots / cols)
+    )
+  }
+
+  if (numPlots == 1) {
+    print(plots[[1]])
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(
+        layout.pos.row = matchidx$row,
+        layout.pos.col = matchidx$col
+      ))
+    }
+  }
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggmap)
+library(stringr)
+library(scales)
+library(gridExtra)
+library(corrplot)
+library(RColorBrewer)
+library(geosphere)
+library(tibble)
+library(forcats)
+library(xgboost)
+library(caret)
+library(leaflet)
+library(maps)
+library(readr)
+library(randomForest)
+
+# Load necessery files
+
+taxi <- read_csv("train.csv")
+fast1 <- read_csv("fastest_train_part_1.csv")
+fast2 <- read_csv("fastest_train_part_2.csv")
+fast1 <- data.frame(fast1)
+fast2 <- data.frame(fast2)
+taxi <- data.frame(taxi)
+set.seed(12345)
+taxi1 <- sample_n(taxi, 400000)
+taxi <- taxi %>% mutate(
+  pickup_datetime = ymd_hms(pickup_datetime),
+  dropoff_datetime = ymd_hms(dropoff_datetime),
+  vendor_id = factor(vendor_id),
+  passenger_count = factor(passenger_count)
+)
+```
+
+### 1. INTRODUCTION  
+
+New York City taxi rides paint a vibrant picture of life in the city. The millions of rides taken each month can provide insight into traffic patterns, road blockage, or large-scale events that attract many New Yorkers. With ridesharing apps gaining popularity, it is increasingly important for taxi companies to provide visibility to their estimated ride duration, since the competing apps provide these metrics upfront.
+
+Predicting duration of a ride can help passengers decide when is the optimal time to start their commute. This problem was posted by **"NYC Taxi and Limousine Commission"** as competition in [Kaggle.com](https://www.kaggle.com/c/nyc-taxi-trip-duration) challenging us to build a model that predicts the total ride duration of taxi trips in New York City.
+
+In this report, we discuss three models: Linear Regression, Random Forest, Gradient Boosting. We evaluate these models based on the Root Mean Square Logarithmic Error [(RMSLE)](https://www.quora.com/What-is-the-difference-between-an-RMSE-and-RMSLE-logarithmic-error-and-does-a-high-RMSE-imply-low-RMSLE)   and Pseudo R^2^. We also discuss the importance of various features in our prediction algorithms.
+
+We achieved lowest RMSLE of 0.3995 and Pseudo R^2^ of 0.7452 in duration prediction using Random Forest model .  
+
+### 2. DATA
+
+Primary data for this analysis was released by the NYC Taxi and Limousine Commission, which includes pickup time, geo-coordinates, number of passengers, and several other variables. Training dataset has close to 1.5 Million and 630k records in test dataset. Each row contains one taxi trip. Added to Taxi data, we are adding Open Source Routing Machine, [OSRM](http://project-osrm.org/) data for each trip. This data is provided by oscarleo and we can download data from [here](https://www.kaggle.com/oscarleo/new-york-city-taxi-with-osrm) and includes the pickup & dropoff, streets and total distance/duration between these two points together with a sequence of travels steps such as turns or entering a highway. Features from OSRM data like, *total_distance*, *total_travel_time* played an important role in this prediction. After through analysis we have removed trips with zerio miles and trips with more than 24 hours duration as outliers. For modelling we are taking a subset of 400K trips and run our model on the subset data.  
+
+Below figure demonstrates the pick-up (blue) and drop-off (red) locations of 5000 trips from our data in New York City.
+
+```{r fig.align = 'default', fig_width = 7, warning = FALSE, out.width="100%", echo=FALSE}
+knitr::include_graphics("NewYork_Ride.jpeg", auto_pdf = TRUE)
+```
+
+### 3. EXPLORATORY DATA ANALYSIS
+
+To better understand the problem and the features, we perform exploratory analysis on the data. The purpose of this analysis is to get insights on how the prediction variables behave with various features and how can we leverage these features in our models to achieve best possible results. Below are few plots will provide us better insight of data we are dealing with. However, I have not included complete EDA analysis of this project. Please refer this [GitHub](https://github.com/suresh2210DS/DS-Cap-proj/blob/master/NYC_EDA.pdf) Link for complete EDA and modelling document.  
+
+Distanct demonstrates a positive correlation  between trip distance and duration. An interesting finding is that the variance of duration increases, as the trip distance increases.
+
+```{r fig.align = 'default', warning = FALSE,  fig.width = 5, fig.height=4, message=FALSE}
+jfk_coord <- tibble(lon = -73.778889, lat = 40.639722)
+la_guardia_coord <- tibble(lon = -73.872611, lat = 40.77725)
+
+pick_coord <- taxi %>%
+  select(pickup_longitude, pickup_latitude)
+drop_coord <- taxi %>%
+  select(dropoff_longitude, dropoff_latitude)
+
+taxi$dist <- distCosine(pick_coord, drop_coord)
+taxi$jfk_dist_pick <- distCosine(pick_coord, jfk_coord)
+taxi$jfk_dist_drop <- distCosine(drop_coord, jfk_coord)
+taxi$lg_dist_pick <- distCosine(pick_coord, la_guardia_coord)
+taxi$lg_dist_drop <- distCosine(drop_coord, la_guardia_coord)
+
+taxi <- taxi %>%
+  mutate(
+    speed = (dist / trip_duration * 2.236),
+    date = date(pickup_datetime),
+    month = month(pickup_datetime, label = TRUE),
+    wday = wday(pickup_datetime, label = TRUE),
+    wday = fct_relevel(wday, c("Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun")),
+    hour = hour(pickup_datetime),
+    work = (hour %in% seq(8, 18)) & (wday %in% c("Mon", "Tues", "Wed", "Thurs", "Fri")),
+    jfk_trip = (jfk_dist_pick < 2e3) | (jfk_dist_drop < 2e3),
+    lg_trip = (lg_dist_pick < 2e3) | (lg_dist_drop < 2e3)
+  )
+
+set.seed(1234)
+taxi %>%
+  sample_n(5000) %>%
+  ggplot(aes(dist, trip_duration)) +
+  geom_point(color = "blue", alpha = 0.4) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Direct distance[meters]", y = "Trip duration[seconds]")
+```
+
+City Rides get busy during day time. Pickup Hour may be an important factor decides trip duration. Lets plot how pick up time impacts duration on weekdays and hours within a day. 
+
+```{r fig.align = 'default', warning = FALSE, fig.width = 7, fig.height=4.5, message=FALSE}
+p1 <- taxi %>%
+  mutate(wday = wday(pickup_datetime, label = TRUE)) %>%
+  group_by(wday, vendor_id) %>%
+  summarise(median_duration = median(trip_duration) / 60) %>%
+  ggplot(aes(wday, median_duration, color = vendor_id)) +
+  geom_point(size = 4) +
+  scale_colour_brewer(palette = "Set1") +
+  labs(x = "Day of the week", y = "Median duration [min]") +
+  theme(panel.background = element_rect(fill = "white"))
+
+p2 <- taxi %>%
+  mutate(pickt = hour(pickup_datetime)) %>%
+  group_by(pickt, vendor_id) %>%
+  summarise(median_duration = median(trip_duration) / 60) %>%
+  ggplot(aes(pickt, median_duration, color = vendor_id)) +
+  geom_smooth(method = "loess", span = 1 / 2) +
+  geom_point(size = 4) +
+  scale_colour_brewer(palette = "Set1") +
+  labs(x = "Hour of the day", y = "Median duration [min]") +
+  theme(legend.position = "none")
+
+layout <- matrix(c(1, 2), 2, 1, byrow = FALSE)
+multiplot(p1, p2, layout = layout)
+```
+
+Trip Duration increases due to traffic on busy roads. Below heat maps give a insight how speed affects trip duration. 
+
+```{r fig.align = 'default', warning = FALSE, fig.width = 5, fig.height=4, message=FALSE}
+P1 <- taxi %>%
+  group_by(wday, hour) %>%
+  summarise(median_speed = median(speed)) %>%
+  ggplot(aes(hour, wday, fill = median_speed)) +
+  geom_tile() +
+  labs(x = "Hour of the day", y = "Day of the week") +
+  scale_fill_distiller(palette = "Spectral")
+layout <- matrix(c(1, 1), 1, 1, byrow = TRUE)
+multiplot(P1, layout = layout)
+```
+
+### 4. PREDICTIVE TASK
+
+We are predicting the duration of a NYC Yellow Taxi ride. Training Data set contains close to 1.4M trips. In order to train the model in less processing time, we have taken subset of 400 thousand records and we are going apply our modelling technique on the data. In order to evaluate the performance of our model, we split the data into a training set (70%), validation set (15%) for cross validation and testing set (15%). Our evaluation metric is **Root Mean Squared Logarithmic Error.** In order to easily simulate the evaluation metric in our model ???tting we replace the *trip_duration* with its logarithm. In comparing the results between our different models, we also report the **pseudo R^2 = 1-MSE/Var(Y)** value in order to evaluate how well the models perform relative to the variance of the data set.
+
+We have plotted trips and summary of Trip Duration to understand training data relevant to test data.
+
+```{r fig.align = 'default', fig.width = 4, fig.height=3, warning = FALSE, echo=FALSE}
+knitr::include_graphics("Summary.jpg", auto_pdf = TRUE)
+```
+
+```{r fig.align = 'default', fig.width = 4, fig.height=3, warning = FALSE, echo=FALSE}
+knitr::include_graphics("Testvstrain.jpg", auto_pdf = TRUE)
+```
+
+### 5.  FEATURES
+
+Feature selection is normally an iterative process where we run an initial model with either few or many features and then step-by-step add or remove some features based on the results of the previous run. Features like *total_travel_time*, *total_distance *, *hour*, *dist*, *wday* are having high corellation and we have used in our models. 
+
+### 6. REGRESSION MODELSs 
+
+#### *Multiple-linear regression*
+
+We are using Linear Regression as our baseline model. The multiple-linear regression model allows us to exploit linear patterns in the data set. This model is an appealing first choice because feature weights are easily interpretable and because it runs efficiently on large datasets. 
+
+Results ->  RMSLE : 0.5321 and Pseudo R^2 : 0.5480
+
+#### *Random Forest*
+
+The tree regression model is capable of representing complex decision boundaries, thus complementing our other chosen models.  Random Forest is chosen since it prevents overfitting and robust against outliers. Since we have limited computing resource, we have run alogrithm with just 50  trees. Results are based on the same. 
+
+Results ->  RMSLE : 0.3995 and Pseudo R^2 : 0.7452
+
+Listed below are important features predicted by Random Forest model and error trend as tree grows. 
+
+```{r fig.align = 'default', fig.width = 6, fig.height=4, warning = FALSE, echo=FALSE}
+knitr::include_graphics("RF_Error.jpg", auto_pdf = TRUE)
+```
+
+```{r fig.align = 'default', fig.width = 6, fig.height=4, warning = FALSE, echo=FALSE}
+knitr::include_graphics("VarImp.jpg", auto_pdf = TRUE)
+```
+
+#### *XGBoost*
+
+XGBoost is an advanced gradient boosting algorithm. It is a highly sophisticated algorithm, powerful enough to deal with all sorts of irregularities of data. The tool is extremely flexible, which allows users to customize a wide range of hyper-parameters while training the mode, and ultimately to reach the optimal solution.
+
+Results ->  RMSLE : 0.4078 and Pseudo R^2 : 0.7345
+
+### 7. MODEL ANALYSIS & CONCLUSION
+
+In order to visualize how well the models (randomforest, xgboost, Linear Regression) perform, we plot the actual versus predicted trip duration in a density plot, where the blue is predicted and red is actual trip duration. 
+
+```{r fig.align = 'default', warning = FALSE, out.width="100%", echo=FALSE}
+knitr::include_graphics("Model Comp.jpeg", auto_pdf = TRUE)
+```
+
+The plots in the figure suggest that both Random Forest and XG Boost models perform well on the test set. Most predictions are almost close to the true values. Random Forest achieved the lowest RMSLE of 0.3995 and Pseudo R^2^ of 0.7452 in duration prediction. Though we cannot claim this as best model by looking at the results. But this is my first take on Machine Learning algorithm predictions, so this can still be used as tool to find approximate estimate. 
+
+***
+
+#### *References: *
+
+* [EDA - NYC TAXI EDA The fast & the curious](https://www.kaggle.com/headsortails/nyc-taxi-eda-update-the-fast-the-curious/notebook)
+
+* [EDA - From EDA to the Top (LB 0.367)](https://www.kaggle.com/gaborfodor/from-eda-to-the-top-lb-0-367)
+
+* [Mapping techniques](http://tutorials.iq.harvard.edu/R/Rgraphics/Rgraphics.html)
+
+* [GGPLOT](http://r-statistics.co/Complete-Ggplot2-Tutorial-Part1-With-R-Code.html?)
+
+* [Machine Learning](https://www.analyticsvidhya.com/blog/2017/09/common-machine-learning-algorithms/)
+
+* [XGBOOST Basics](https://www.hackerearth.com/practice/machine-learning/machine-learning-algorithms/beginners-tutorial-on-xgboost-parameter-tuning-r/tutorial/)
