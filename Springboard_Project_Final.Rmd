@@ -1,7 +1,7 @@
 ---
 pdf_document: default
 author: "Suresh Gopalakrishnan"
-date: "February 11, 2018"
+date: "February 17, 2018"
 output: pdf_document
 title: 'NYC Taxi Rides: Trip Duration Prediction'
 dev: png
@@ -89,6 +89,7 @@ library(leaflet)
 library(maps)
 library(readr)
 library(randomForest)
+library(knitr)
 
 # Load necessery files
 
@@ -232,7 +233,7 @@ knitr::include_graphics("Testvstrain.jpg", auto_pdf = TRUE)
 
 Feature selection is normally an iterative process where we run an initial model with either few or many features and then step-by-step add or remove some features based on the results of the previous run. Features like *total_travel_time*, *total_distance *, *hour*, *dist*, *wday* are having high corellation and we have used in our models. 
 
-### 6. REGRESSION MODELSs 
+### 6. REGRESSION MODELS
 
 #### *Multiple-linear regression*
 
@@ -262,12 +263,23 @@ XGBoost is an advanced gradient boosting algorithm. It is a highly sophisticated
 
 Results ->  RMSLE : 0.4078 and Pseudo R^2 : 0.7345
 
+The results of all the models are compared in the below table
+
+```{r fig.align = 'default', warning = FALSE, message=FALSE}
+Algorithms <- c("Linear Regression", "Random Forest", "XG Boost")
+RMSLE <- c(0.5321, 0.3995, 0.4078)
+Pseudo_R2 <- c(0.5480, 0.7452, 0.7345)
+Result <- data.frame(Algorithms,RMSLE,Pseudo_R2)
+colnames(Result) <-  c("Algorithm","RMLSE","Pseudo R^2")
+kable(Result, format = "markdown", align = c('l','c','c'), caption = "Comparison")
+```
+
 ### 7. MODEL ANALYSIS & CONCLUSION
 
 In order to visualize how well the models (randomforest, xgboost, Linear Regression) perform, we plot the actual versus predicted trip duration in a density plot, where the blue is predicted and red is actual trip duration. 
 
 ```{r fig.align = 'default', warning = FALSE, out.width="100%", echo=FALSE}
-knitr::include_graphics("Model Comp.jpeg", auto_pdf = TRUE)
+knitr::include_graphics("Model_Comp.jpeg", auto_pdf = TRUE)
 ```
 
 The plots in the figure suggest that both Random Forest and XG Boost models perform well on the test set. Most predictions are almost close to the true values. Random Forest achieved the lowest RMSLE of 0.3995 and Pseudo R^2^ of 0.7452 in duration prediction. Though we cannot claim this as best model by looking at the results. But this is my first take on Machine Learning algorithm predictions, so this can still be used as tool to find approximate estimate. 
