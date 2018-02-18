@@ -276,7 +276,7 @@ kable(Result, format = "markdown", align = c('l','c','c'), caption = "Comparison
 
 ### 7. MODEL ANALYSIS & CONCLUSION
 
-In order to visualize how well the models (randomforest, xgboost, Linear Regression) perform, we plot the actual versus predicted trip duration in a density plot, where the blue is predicted and red is actual trip duration. 
+In order to visualize how well the models (randomforest, xgboost, Linear Regression) perform, we plot the actual versus predicted trip duration scatter plot.
 
 ```{r fig.align = 'default', warning = FALSE, out.width="100%", echo=FALSE}
 knitr::include_graphics("Model_Comp.jpeg", auto_pdf = TRUE)
