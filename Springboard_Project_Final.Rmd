@@ -282,7 +282,7 @@ In order to visualize how well the models (randomforest, xgboost, Linear Regress
 knitr::include_graphics("Model_Comp.jpeg", auto_pdf = TRUE)
 ```
 
-The plots in the figure suggest that both Random Forest and XG Boost models perform well on the test set. Most predictions are almost close to the true values. Random Forest achieved the lowest RMSLE of 0.3995 and Pseudo R^2^ of 0.7452 in duration prediction. Though we cannot claim this as best model by looking at the results. But this is my first take on Machine Learning algorithm predictions, so this can still be used as tool to find approximate estimate. 
+The plots in the figure suggest that both Random Forest and XG Boost models perform well on the test set. Most predictions are almost close to the true values. Random Forest achieved the lowest RMSLE of 0.3995 and Pseudo R^2^ of 0.7452 in duration prediction. Though we cannot claim this as best model by looking at the results. However, this can still be used as tool to find an approximate estimate. 
 
 ***
 
