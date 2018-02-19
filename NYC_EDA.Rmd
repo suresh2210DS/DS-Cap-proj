@@ -5,12 +5,11 @@ output:
   number_sections: true
   fig_width: 7
   fig_height: 4.5
-  theme: "cosmo"
-  linkcolor: "cyan"
-  
+  urlcolor: blue
+
 ---
 
-# TAXI TAXI - A beginner approach on Exploratory Analysis#
+# TAXI TAXI - A beginner approach on Exploratory Analysis
 Suresh  
 Date- `r Sys.Date()`  
 
@@ -18,18 +17,11 @@ Date- `r Sys.Date()`
 knitr::include_graphics("Taxi2.jpg", auto_pdf = TRUE)
 ```
 
-```{r Set_memory, message=FALSE, echo=FALSE}
+```{r Set_memory, message=FALSE, echo=FALSE, results='hide'}
 # to resolve memory issue
 memory.limit(size = 56000)
 ```
  
-```{r remove_junk, message=FALSE, echo=FALSE}
-# to resolve ggmap table error during execution.
-if (exists(".GeocodedInformation")) {
-  rm(.GeocodedInformation)
-}
-```
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -83,7 +75,7 @@ This is an basic Exploratory Data Analysis for the [NYC Taxi Ride Duration](http
 New York City taxi rides paint a vibrant picture of life in the city. The millions of rides taken each month can provide insight into traffic patterns, road blockage, or large-scale events that attract many New Yorkers. With ridesharing apps gaining popularity, it is increasingly important for taxi companies to provide visibility to their estimated fare and
 ride duration, since the competing apps provide these metrics upfront. Predicting fare and duration of a ride can help passengers decide when is the optimal time to start their commute.
 
-The primary goal of this project is to predict trip duration of NYC Taxis based on features like trip coordinates, duration date and time. Training dataset has close to 1.5 Million and 630k records in test dataset. Each row contains one taxi trip. 
+The primary goal of this project is to predict trip duration of NYC Taxis based on features like trip coordinates, duration date and time. Training dataset has close to 1.4 Million and 630k records in test dataset. Each row contains one taxi trip. 
 
 
 #### Load required Packages    
@@ -110,17 +102,19 @@ library(caret)
 library(leaflet)
 library(maps)
 library(readr)
+library(randomForest)
+library(knitr)
 ```
 
 
 #### Load Data     
 
-We are using Read CSV function to read test, train and submission file data into R.  
+We are using Read CSV function to read train file data into R.  
 
 ```{r}
-taxi <- read.csv("train.csv")
-test <- read.csv("test.csv")
-submit <- read.csv("sample_submission.csv")
+taxi <- read_csv("train.csv")
+set.seed(12345)
+taxi1 <- sample_n(taxi, 400000)
 ```
 
 #### File Structure & Integrity 
@@ -130,8 +124,6 @@ In this section we are checking the summary of Taxi Records and also check if an
 ```{r }
 glimpse(taxi)
 taxi <- data.frame(taxi)
-test <- data.frame(test)
-submit <- data.frame(submit)
 ```
 
 We find below observations on Taxi Records  
@@ -148,30 +140,13 @@ We find below observations on Taxi Records
 
 * *trip_duration* hold the duration in seconds and its our target prediction of ths project. 
 
-* Please note Test data will not have actual trip duration data. We have to submit the data in Kaggle to know the model score. 
-
 **Lets check the missing values of Taxi  and Test Records ** 
 
 ```{r}
 sum(is.na(taxi))
-sum(is.na(test))
 ```
 
 We have received Zero count. So we dont have any missing values in Dataset. 
-
-In preparation for our eventual modelling analysis we combine the Test and Train(Taxi) records into a single one. 
-
-```{r message=FALSE,warning=FALSE }
-combine <- bind_rows(
-  taxi %>% mutate(dset = "train"),
-  test %>% mutate(
-    dset = "test",
-    dropoff_datetime = NA,
-    trip_duration = NA
-  )
-)
-combine <- combine %>% mutate(dset = factor(dset))
-```
 
 
 #### Reformating data for our analysis 
@@ -208,6 +183,10 @@ taxi %>%
 We are starting with NYC Map to check where the most of pickup and dropoff are happening. We took 5000 samples from Taxi file and plotted.  It turns out that almost all of our trips were in fact taking place in Manhattan only.  
 
 ```{r fig.align = 'default', warning = FALSE, out.width="100%", message=FALSE}
+
+if (exists(".GeocodedInformation")) {
+  rm(.GeocodedInformation)
+}
 
 my_map <- get_map(location = "New York City", zoom = 12, maptype = "roadmap", source = "google", color = "color")
 set.seed(1234)
@@ -554,14 +533,12 @@ taxi <- taxi %>%
 We are adding Open Source Routing Machine, [OSRM](http://project-osrm.org/) data for each trip. This data is  provided by oscarleo and we can download data from [here](https://www.kaggle.com/oscarleo/new-york-city-taxi-with-osrm) and includes the pickup/dropoff streets and total distance/duration between these two points together with a sequence of travels steps such as turns or entering a highway.
 
 ```{r warning=FALSE}
-fast1 <- read.csv("fastest_train_part_1.csv")
-fast2 <- read.csv("fastest_train_part_2.csv")
-ftest <- read.csv("fastest_routes_test.csv")
+fast1 <- read_csv("fastest_train_part_1.csv")
+fast2 <- read_csv("fastest_train_part_2.csv")
 fast1 <- data.frame(fast1)
 fast2 <- data.frame(fast2)
-ftest <- data.frame(ftest)
 
-fastest_route <- bind_rows(fast1, fast2, ftest)
+fastest_route <- bind_rows(fast1, fast2)
 glimpse(fastest_route)
 ```
  
@@ -673,19 +650,46 @@ knitr::include_graphics("Corr_Plot.jpg", auto_pdf = TRUE)
 
 ### Model Selection and Prediction   
 
-Next is our most important step to find best method to predict the duration. We gonna test model our data with  XGBoost.
+Next is our most important step to find best method to predict the duration. For modelling we are taking a subset of 400K trips and run our model on the subset data. In this report, we discuss three models: Linear Regression, Random Forest, Gradient Boosting. We evaluate these models based on the Root Mean Square Logarithmic Error [(RMSLE)](https://www.quora.com/What-is-the-difference-between-an-RMSE-and-RMSLE-logarithmic-error-and-does-a-high-RMSE-imply-low-RMSLE)   and Pseudo R^2^. We also discuss the importance of various features in our prediction algorithms.
 
-We will start with XGBoost model now. Inorder to make sure we are training a feature which is relevent to test data. Plotting Test and Training Data overlap to see they are relevent. 
+ To assess the mode performance we will run a cross-validation step and also split our training subset data into a *train * ,*validation*,*test* data set. Thereby, the model performance can be evaluated on a sample that the algorithm has not seen. We split our data into 70/15/15 fractions using a tool from the [caret package](https://cran.r-project.org/web/packages/caret/index.html).
 
 ```{r}
-Temp1 <- combine %>%
-  mutate(date = date(ymd_hms(pickup_datetime))) %>%
-  group_by(date, dset) %>%
-  count()
-Temp1 %>%
-  ggplot(aes(date, n, color = dset)) +
-  geom_line(size = 1.5) +
-  labs(x = "", y = "Trips per day")
+set.seed(4321)
+trainIndex <- createDataPartition(taxi1$trip_duration, p = 0.7, list = FALSE, times = 1)
+
+train <- taxi1[trainIndex, ]
+valid <- taxi1[-trainIndex, ]
+
+trainIndex <- createDataPartition(valid$trip_duration, p = 0.5, list = FALSE, times = 1)
+valid <- valid[trainIndex, ]
+test <- valid[-trainIndex, ]
+```
+
+
+We will start with XGBoost model now.Inorder to make sure we are training a feature which is relevent to test data. Plotting Test and Training Data overlap to see they are relevent. 
+
+```{r fig.align = 'default', warning = FALSE,  fig.width = 5, fig.height=4, message=FALSE}
+combine <- bind_rows(
+  train %>% mutate(dset = "train"),
+  test %>% mutate(dset = "test"),
+  valid %>% mutate(dset = "valid")
+)
+
+combine <- combine %>% mutate(dset = factor(dset))
+
+pick_good <- combine %>%
+  filter(pickup_longitude > -75 & pickup_longitude < -73) %>%
+  filter(pickup_latitude > 40 & pickup_latitude < 42)
+pick_good <- sample_n(pick_good, 5000)
+
+pick_good %>%
+  ggplot(aes(pickup_longitude, pickup_latitude, color = dset)) +
+  geom_point(size = 0.1, alpha = 0.5) +
+  coord_cartesian(xlim = c(-74.02, -73.77), ylim = c(40.63, 40.84)) +
+  facet_wrap(~ dset) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 4))) +
+  theme(legend.position = "none")
 ```
 
 *** Data formatting 
@@ -747,6 +751,11 @@ Next, we are selecting Feature to be in the model. I have run the feature select
 
 ```{r}
 
+# convert trip_duration to log
+
+combine <- combine %>%
+  mutate(trip_duration = log(trip_duration + 1))
+
 # predictor variables
 train_cols <- c(
   "total_travel_time", "total_distance", "hour", "dist",
@@ -755,20 +764,11 @@ train_cols <- c(
 )
 # target variable
 y_col <- c("trip_duration")
-# id feature
-id_col <- c("id")
 # auxilliary varaible
 aux_cols <- c("dset")
 # cleaning variable
-clean_cols <- c("jfk_dist_drop", "jfk_dist_pick")
+clean_cols <- c("jfk_dist_pick")
 # ---------------------------------
-
-# General extraction
-# ---------------------------------
-# extract test id column
-test_id <- combine %>%
-  filter(dset == "test") %>%
-  select_(.dots = id_col)
 
 # all relevant columns for train/test
 cols <- c(train_cols, y_col, aux_cols, clean_cols)
@@ -781,28 +781,17 @@ train <- combine %>%
   select_(.dots = str_c("-", c(aux_cols)))
 test <- combine %>%
   filter(dset == "test") %>%
-  select_(.dots = str_c("-", c(aux_cols, clean_cols, y_col)))
+  select_(.dots = str_c("-", c(aux_cols)))
 
-# convert trip_duration to log
-
-train <- train %>%
-  mutate(trip_duration = log(trip_duration + 1))
-```
-
-To assess the mode performance we will run a cross-validation step and also split our training data into a *train* vs *validation* data set. Thereby, the model performance can be evaluated on a sample that the algorithm has not seen. We split our data into 80/20 fractions using a tool from the [caret package](https://cran.r-project.org/web/packages/caret/index.html).
-
-```{r}
-set.seed(4321)
-trainIndex <- createDataPartition(train$trip_duration, p = 0.8, list = FALSE, times = 1)
-
-train <- train[trainIndex, ]
-valid <- train[-trainIndex, ]
+valid <- combine %>%
+  filter(dset == "valid") %>%
+  select_(.dots = str_c("-", c(aux_cols)))
 ```
 
 Next we clean the date before we start processng the date. We will do celaning only on Training dataset inorder to identify overfitting if we see any variance with Validation dataset. 
 
-
 ```{r}
+
 valid <- valid %>%
   select_(.dots = str_c("-", c(clean_cols)))
 
@@ -812,6 +801,7 @@ train <- train %>%
     jfk_dist_pick < 3e5 & jfk_dist_drop < 3e5
   ) %>%
   select_(.dots = str_c("-", c(clean_cols)))
+  
 ```
 
 
@@ -866,7 +856,12 @@ After the fitting we are running a 5-fold cross-validation (CV) to estimate our 
 NOTE: Reducing number of rounds to 60 due to memory and cpu issue. 
 
 ```{r xross_validation}
-xgb_cv <- xgb.cv(xgb_params, dtrain, early_stopping_rounds = 10, nfold = 5, nrounds = 60)
+xgb_cv <- xgb.cv(xgb_params, 
+                dtrain, 
+                early_stopping_rounds = 10, 
+                print_every_n = 10, 
+                nfold = 5, 
+                nrounds = 60)
 ```
 
 ## Feature importance
@@ -887,51 +882,139 @@ Write the XGBoost prediction to csv file and later will submit in Kaggle to know
 
 ```{r write_prediction }
 test_preds <- predict(gb_dt, dtest)
-pred <- test_id %>%
-  mutate(trip_duration = exp(test_preds) - 1)
+xgb_test <- test %>%
+  mutate(pred_trip_time = test_preds)
 
-pred %>% write_csv("submit_XGBOOST.csv")
+xgb_test %>% write_csv("XGBOOST_TEST_PREDICTION.csv")
+
+xgb_RMSLE <- RMSE(xgb_test$pred_trip_time, xgb_test$trip_duration)
+xg_rsq <- 1 - (mean((xgb_test$pred_trip_time - xgb_test$trip_duration) ^ 2) / var(xgb_test$trip_duration))
 ```
 
-We have to compare the prediction file trip ids are matching with submit file Id. Also we have to checking the 
+Results of XG Boost predictions are RMSE -> `r xgb_RMSLE` and Pseudo R^2 -> `r xg_rsq`
+          
+Next we start with Random Forest modelling. Random Forest modelling takes more CPU time to run in local machine. So we have runt he model outside Markdown and attached results for the same. Below is the model and its error plots. Overall Random Forest algorithm performed well than XG boost for our feature selection and data. 
 
-```{r Plot_prediction}
-identical(dim(submit), dim(pred))
-glimpse(submit)
-glimpse(pred)
-bind_cols(submit, pred) %>% head(5)
 
-trntemp <- train %>%
-  select(trip_duration) %>%
-  mutate(
-    dset = "train",
-    trip_duration = exp(trip_duration) - 1
-  )
-predtmp <- pred %>%
-  mutate(dset = "predict")
+rf_model  <- randomForest(trip_duration ~ total_travel_time + total_distance + hour + dist +
+                        vendor_id + jfk_trip + lg_trip + wday +  month +
+                        pickup_longitude + pickup_latitude + lg_dist_drop,
+                        data = train, 
+                        na.action = na.omit,
+                        importance = TRUE,
+                        ntree = 50,
+                        do.trace=TRUE)
 
-bind_rows(trntemp, predtmp) %>%
-  ggplot(aes(trip_duration, fill = dset)) +
-  geom_density(alpha = 0.5) +
-  scale_x_log10()
+Results of XG Boost predictions are RMSE -> 0.3995 and Pseudo R^2 -> 0.7452
+
+Listed below are important features predicted by Random Forest model and error trend as tree grows. 
+
+```{r fig.align = 'default', fig.width = 6, fig.height=4, warning = FALSE, echo=FALSE}
+knitr::include_graphics("RF_Error.jpg", auto_pdf = TRUE)
 ```
 
-Final Score calcualted by Kaggle 
+```{r fig.align = 'default', fig.width = 6, fig.height=4, warning = FALSE, echo=FALSE}
+knitr::include_graphics("VarImp.jpg", auto_pdf = TRUE)
+```
 
-```{r fig.align = 'default', warning = FALSE, out.width="100%", echo=FALSE}
-knitr::include_graphics("Submission.png", auto_pdf = TRUE)
+In order to reivew the results of Random Forest we are reading the results of preduction test file and plot down the line for comparison. 
+
+```{r warning = FALSE, message= FALSE}
+rf_test <- read_csv("RF_TEST_PREDICTION.csv")
+```
+
+Next is our base line model Linear Regression.
+
+```{r}
+lr_md1 <- lm(
+  trip_duration ~ total_travel_time + total_distance + hour + dist +
+    vendor_id + jfk_trip + lg_trip + wday + month +
+    pickup_longitude + pickup_latitude + lg_dist_drop,
+  data = train,
+  na.action = na.omit
+)
+summary(lr_md1)
+```
+
+```{r}
+lr_pred <- predict(lr_md1, test)
+lr_test <- test %>%
+  mutate(pred_trip_time = lr_pred)
+
+lr_test %>% write_csv("LREG_TEST_PREDICTION.csv")
+
+lr_RMSLE <- RMSE(lr_test$pred_trip_time, lr_test$trip_duration)
+lr_rsq <- 1 - (mean((lr_test$pred_trip_time - lr_test$trip_duration) ^ 2) / var(lr_test$trip_duration))
+```
+
+The results of all the models are compared in the below table
+
+```{r fig.align = 'default', warning = FALSE, message=FALSE, echo=FALSE}
+Algorithms <- c("Linear Regression", "Random Forest", "XG Boost")
+RMSLE <- c(lr_RMSLE, 0.3995, xgb_RMSLE)
+Pseudo_R2 <- c(lr_rsq, 0.7452, xg_rsq)
+Result <- data.frame(Algorithms, RMSLE, Pseudo_R2)
+colnames(Result) <- c("Algorithm", "RMLSE", "Pseudo R^2")
+kable(Result, format = "markdown", align = c("l", "c", "c"), caption = "Comparison")
+```
+
+In order to visualize how well the models (randomforest, xgboost, Linear Regression) perform, we plot the actual versus predicted trip duration scatter plot. The plots in the figure suggest that both Random Forest and XG Boost models perform well on the test set. Most predictions are almost close to the true values.
+
+```{r fig.align = 'default', fig.width = 7, fig.height = 5, out.width="100%", warning = FALSE, echo=FALSE}
+
+lr_test <- lr_test %>% 
+           mutate(trip_duration = exp(trip_duration) - 1) %>%
+           mutate(pred_trip_time = exp(pred_trip_time) - 1)
+
+xgb_test <- xgb_test %>% 
+            mutate(trip_duration = exp(trip_duration) - 1) %>% 
+            mutate(pred_trip_time = exp(pred_trip_time) - 1)
+
+rf_test <- rf_test %>% 
+            mutate(trip_duration = exp(trip_duration) - 1) %>% 
+            mutate(pred_trip_time = exp(pred_trip_time) - 1)
+
+P1 <- lr_test %>%
+  sample_n(5000) %>%
+  filter(trip_duration < 5 * 3600) %>%
+  ggplot(aes(pred_trip_time, trip_duration, color = pred_trip_time)) +
+  geom_point(alpha = 0.4) +
+  scale_color_gradient(name = "Time in Sec's", low = "blue", high = "red") +
+  coord_cartesian(xlim = c(0, 5000), ylim = c(0, 5000)) +
+  labs(title = "Linear Regression", y = "Actual", x = "Predicted", subtitle = "RMSLE- 0.5321 & Pseudo R^2- 0.5480")
+
+P2 <- rf_test %>%
+  sample_n(5000) %>%
+  ggplot(aes(pred_trip_time, trip_duration, color = pred_trip_time)) +
+  geom_point(alpha = 0.4) +
+  scale_color_gradient(name = "Time in Sec's", low = "blue", high = "red") +
+  coord_cartesian(xlim = c(0, 5000), ylim = c(0, 5000)) +
+  labs(title = "Random Forest", y = "Actual", x = "Predicted", subtitle = "RMSLE- 0.3995 & Pseudo R^2- 0.7452")
+
+P3 <- xgb_test %>%
+  sample_n(5000) %>%
+  ggplot(aes(pred_trip_time, trip_duration, color = pred_trip_time)) +
+  geom_point(alpha = 0.4) +
+  scale_color_gradient(name = "Time in Sec's", low = "blue", high = "red") +
+  coord_cartesian(xlim = c(0, 5000), ylim = c(0, 5000)) +
+  labs(title = "XG Boost", y = "Actual", x = "Predicted", subtitle = "RMSLE- '0.4038' & Pseudo R^2- 0.7397")
+
+layout <- matrix(c(1, 2, 3), 3, 1, byrow = TRUE)
+multiplot(P1, P2, P3, layout = layout)
 ```
 
 ####References: 
 
-* EDA - NYC TAXI EDA The fast & the curious [LINK](https://www.kaggle.com/headsortails/nyc-taxi-eda-update-the-fast-the-curious/notebook)
+* [EDA - NYC TAXI EDA The fast & the curious](https://www.kaggle.com/headsortails/nyc-taxi-eda-update-the-fast-the-curious/notebook)
 
-* EDA - From EDA to the Top (LB 0.367) [LINK](https://www.kaggle.com/gaborfodor/from-eda-to-the-top-lb-0-367)
+* [EDA - From EDA to the Top (LB 0.367)](https://www.kaggle.com/gaborfodor/from-eda-to-the-top-lb-0-367)
 
-* Mapping techniques  [LINK](http://tutorials.iq.harvard.edu/R/Rgraphics/Rgraphics.html)
+* [Mapping techniques](http://tutorials.iq.harvard.edu/R/Rgraphics/Rgraphics.html)
 
-* GGPLOT [LINK](http://r-statistics.co/Complete-Ggplot2-Tutorial-Part1-With-R-Code.html?)
+* [GGPLOT](http://r-statistics.co/Complete-Ggplot2-Tutorial-Part1-With-R-Code.html?)
 
-* Machine Learning [LINK](https://www.analyticsvidhya.com/blog/2017/09/common-machine-learning-algorithms/)
+* [Machine Learning](https://www.analyticsvidhya.com/blog/2017/09/common-machine-learning-algorithms/)
 
-* XGBOOST Basics [LINK](https://www.hackerearth.com/practice/machine-learning/machine-learning-algorithms/beginners-tutorial-on-xgboost-parameter-tuning-r/tutorial/)
+* [XGBOOST Basics](https://www.hackerearth.com/practice/machine-learning/machine-learning-algorithms/beginners-tutorial-on-xgboost-parameter-tuning-r/tutorial/)
+
+
